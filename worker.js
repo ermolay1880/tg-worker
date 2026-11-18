@@ -1,12 +1,9 @@
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const dst = url.searchParams.get("dst");
+    // Берем dst из параметров, если нет - используем дефолтный IP DC2 для теста
+    const dst = url.searchParams.get("dst") || "149.154.167.51"; 
     
-    if (!dst) {
-      return new Response("Missing dst parameter", { status: 400 });
-    }
-
     const upgradeHeader = request.headers.get("Upgrade");
     if (!upgradeHeader || upgradeHeader !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
@@ -27,37 +24,42 @@ export default {
 
 async function handleConnection(ws, dst) {
   try {
-    // Подключаемся к серверу Telegram
+    // Пытаемся подключиться к Telegram
     const tcp = await connect({ hostname: dst, port: 443 });
     
-    // Безопасная перекачка данных из WebSocket в TCP
+    // Поток 1: От клиента (Telegram Desktop) к серверу (Telegram DC)
     const pumpWsToTcp = async () => {
       const writer = tcp.writable.getWriter();
       try {
         for await (const chunk of ws.readable) {
           await writer.write(chunk);
         }
+      } catch (e) {
+        // Игнорируем ошибки при разрыве соединения клиентом
       } finally {
-        writer.releaseLock();
+        try { writer.close(); } catch {}
       }
     };
 
-    // Безопасная перекачка данных из TCP в WebSocket
+    // Поток 2: От сервера (Telegram DC) к клиенту (Telegram Desktop)
     const pumpTcpToWs = async () => {
       const writer = ws.writable.getWriter();
       try {
         for await (const chunk of tcp.readable) {
           await writer.write(chunk);
         }
+      } catch (e) {
+        // Игнорируем ошибки
       } finally {
-        writer.releaseLock();
+        try { writer.close(); } catch {}
       }
     };
 
-    // Запускаем оба процесса параллельно
+    // Запускаем оба потока параллельно
     await Promise.all([pumpWsToTcp(), pumpTcpToWs()]);
   } catch (e) {
-    // Игнорируем ошибки при закрытии соединения клиентом
+    // Если connect не сработал, пишем ошибку (она будет видна в логах Cloudflare)
+    console.error("Worker connect failed for dst:", dst, e);
   } finally {
     try { ws.close(); } catch {}
   }
