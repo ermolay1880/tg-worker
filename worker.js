@@ -1,12 +1,8 @@
 import { connect } from "cloudflare:sockets";
 
 function toBytes(data) {
-  if (data instanceof ArrayBuffer) {
-    return new Uint8Array(data);
-  }
-  if (typeof data === "string") {
-    return new TextEncoder().encode(data);
-  }
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (typeof data === "string") return new TextEncoder().encode(data);
   if (data && typeof data.arrayBuffer === "function") {
     return data.arrayBuffer().then((ab) => new Uint8Array(ab));
   }
@@ -29,9 +25,7 @@ export default {
       return new Response("Missing dst", { status: 400 });
     }
 
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
+    const [client, server] = Object.values(new WebSocketPair());
     server.accept();
 
     const socket = connect({ hostname: dst, port: 443 });
@@ -42,43 +36,27 @@ export default {
       try {
         await tcpWriter.write(await toBytes(event.data));
       } catch {
-        try {
-          server.close(1011, "tcp write failed");
-        } catch {}
+        try { server.close(1011, "tcp write failed"); } catch {}
       }
     });
 
     server.addEventListener("close", async () => {
-      try {
-        await tcpWriter.close();
-      } catch {}
-      try {
-        socket.close();
-      } catch {}
+      try { await tcpWriter.close(); } catch {}
+      try { socket.close(); } catch {}
     });
 
     (async () => {
       try {
         while (true) {
           const { value, done } = await tcpReader.read();
-          if (done) {
-            break;
-          }
-          if (value) {
-            server.send(value);
-          }
+          if (done) break;
+          if (value) server.send(value);
         }
       } catch {
       } finally {
-        try {
-          server.close();
-        } catch {}
-        try {
-          tcpReader.releaseLock();
-        } catch {}
-        try {
-          socket.close();
-        } catch {}
+        try { server.close(); } catch {}
+        try { tcpReader.releaseLock(); } catch {}
+        try { socket.close(); } catch {}
       }
     })();
 
